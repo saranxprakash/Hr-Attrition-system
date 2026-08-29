@@ -3,3 +3,4 @@ __pycache__/
 users.json
 data/csv_archive/
 .streamlit/secrets.toml
+.env

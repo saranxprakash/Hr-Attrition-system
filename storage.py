@@ -1,38 +1,39 @@
-import json
 import re
 from datetime import datetime
-from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
+from io import StringIO
+from supabase import create_client
+from dotenv import load_dotenv
+import os
 
+load_dotenv()  # this line must come BEFORE os.environ
+from dotenv import load_dotenv
+import os
 
-ARCHIVE_DIRECTORY = Path(__file__).with_name("data") / "csv_archive"
-ARCHIVE_INDEX = ARCHIVE_DIRECTORY / "index.json"
+load_dotenv()
+SUPABASE_URL = "https://bprkzmyvfxyoljhjeyyr.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJwcmt6bXl2Znh5b2xqaGpleXlyIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODAwNTgwMSwiZXhwIjoyMTAzNTgxODAxfQ.6JsHLIXAzaGAmJmP3D5CTXz-CxKwHFwTIMA6Jj2LUrQ"  # use service role for backend
+BUCKET_NAME = "csv-archive"
 
-
-def _read_index():
-    if not ARCHIVE_INDEX.exists():
-        return []
-    try:
-        return json.loads(ARCHIVE_INDEX.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-
-
-def _write_index(records):
-    ARCHIVE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    ARCHIVE_INDEX.write_text(json.dumps(records, indent=2), encoding="utf-8")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def archive_csv(uploaded_file, frame, owner_email, reporting_month):
-    """Save an uploaded CSV locally and return its archive metadata."""
-    ARCHIVE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", uploaded_file.name)
+    """Upload CSV to Supabase Storage and save metadata to Postgres."""
     archive_id = uuid4().hex[:12]
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", uploaded_file.name)
     stored_name = f"{datetime.now():%Y%m%d_%H%M%S}_{archive_id}_{safe_name}"
-    path = ARCHIVE_DIRECTORY / stored_name
-    path.write_bytes(uploaded_file.getvalue())
+
+    # Upload file to Supabase Storage
+    supabase.storage.from_(BUCKET_NAME).upload(
+        path=stored_name,
+        file=uploaded_file.getvalue(),
+        file_options={"content-type": "text/csv"},
+    )
+
+    # Save metadata to Postgres
     record = {
         "id": archive_id,
         "owner": owner_email.lower(),
@@ -43,33 +44,56 @@ def archive_csv(uploaded_file, frame, owner_email, reporting_month):
         "reporting_month_display": reporting_month.strftime("%B %Y"),
         "uploaded_at": datetime.now().strftime("%d %b %Y, %I:%M %p"),
     }
-    records = _read_index()
-    records.insert(0, record)
-    _write_index(records)
+    supabase.table("csv_archives").insert(record).execute()
     return record
 
 
 def list_archives(owner_email):
-    return [record for record in _read_index() if record["owner"] == owner_email.lower()]
+    response = (
+        supabase.table("csv_archives")
+        .select("*")
+        .eq("owner", owner_email.lower())
+        .order("uploaded_at", desc=True)
+        .execute()
+    )
+    return response.data
 
 
 def load_archive(archive_id, owner_email):
-    record = next((item for item in list_archives(owner_email) if item["id"] == archive_id), None)
-    if record is None:
+    # Verify ownership
+    response = (
+        supabase.table("csv_archives")
+        .select("*")
+        .eq("id", archive_id)
+        .eq("owner", owner_email.lower())
+        .single()
+        .execute()
+    )
+    record = response.data
+    if not record:
         return None, None
-    path = ARCHIVE_DIRECTORY / record["stored_name"]
-    if not path.exists():
-        return None, None
-    return pd.read_csv(path), record
+
+    # Download CSV from Storage
+    file_bytes = supabase.storage.from_(BUCKET_NAME).download(record["stored_name"])
+    frame = pd.read_csv(StringIO(file_bytes.decode("utf-8")))
+    return frame, record
 
 
 def delete_archive(archive_id, owner_email):
-    records = _read_index()
-    target = next((item for item in records if item["id"] == archive_id and item["owner"] == owner_email.lower()), None)
-    if target is None:
+    # Verify ownership and get stored_name
+    response = (
+        supabase.table("csv_archives")
+        .select("stored_name")
+        .eq("id", archive_id)
+        .eq("owner", owner_email.lower())
+        .single()
+        .execute()
+    )
+    record = response.data
+    if not record:
         return False
-    path = ARCHIVE_DIRECTORY / target["stored_name"]
-    if path.exists():
-        path.unlink()
-    _write_index([item for item in records if item["id"] != archive_id])
+
+    # Delete from Storage and Postgres
+    supabase.storage.from_(BUCKET_NAME).remove([record["stored_name"]])
+    supabase.table("csv_archives").delete().eq("id", archive_id).execute()
     return True
