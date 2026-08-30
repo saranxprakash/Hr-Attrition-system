@@ -1,11 +1,11 @@
 import streamlit as st
 
-from dashboard_views import build_context, render_assistant, render_departments, render_overview, render_watchlist
+from dashboard_views import build_context, render_assistant, render_comparison, render_departments, render_overview, render_watchlist
 from data_processing import analyze_feedback
 
 ICON_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iOCIgZmlsbD0iIzFBNzNFOCIvPjxwYXRoIGQ9Ik03IDIyIEwxMSAyMiBMMTMgMTYgTDE2IDI2IEwxOSAxMiBMMjEgMjIgTDI1IDIyIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9yZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZmlsbD0ibm9uZSIvPjwvc3ZnPg=="
 ICON_URI = f"data:image/svg+xml;base64,{ICON_B64}"
-NAVIGATION_OPTIONS = ["Overview", "Watchlist", "Departments", "AI assistant", "CSV archive"]
+NAVIGATION_OPTIONS = ["Overview", "Watchlist", "Departments", "Month comparison", "AI assistant", "CSV archive"]
 
 
 def _left_navigation(container):
@@ -71,12 +71,18 @@ def _render_content(selected):
         "Overview": f"Hello, {first_name}",
         "Watchlist": "Employee watchlist",
         "Departments": "Department insights",
+        "Month comparison": "Month-on-month comparison",
         "AI assistant": "PeopleLens AI assistant",
     }
     st.html('<style>.block-container { padding: 30px 44px 64px !important; max-width: 1500px !important; margin: 0 auto; }</style>')
     st.html('<div class="report-eyebrow">WORKFORCE REPORT</div>')
     st.title(page_headings[selected])
     st.caption(f"{reporting_month} · Your employee-feedback insights are ready to review.")
+
+    if selected == "Month comparison":
+        render_comparison(st.session_state.user["email"])
+        return
+
     context = build_context(analyze_feedback(st.session_state.feedback_data))
 
     if selected == "Overview":

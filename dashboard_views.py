@@ -154,6 +154,103 @@ def render_departments(context):
             st.write("Use individual feedback themes to guide team-level policy, workload, or manager-support improvements.")
 
 
+def render_comparison(owner_email):
+    from data_processing import compare_months
+    from storage import list_archives
+
+    st.subheader("Month-on-month comparison", anchor=False)
+    st.caption("Highlights employees whose satisfaction score changed across reporting months.")
+
+    archives = list_archives(owner_email)
+
+    if len(archives) < 2:
+        st.info("Upload at least 2 months of data to see comparisons.")
+        return
+
+    month_options = {a["reporting_month_display"]: a for a in archives}
+    selected = st.multiselect(
+        "Select months to compare",
+        options=list(month_options.keys()),
+        default=list(month_options.keys())[:2],
+    )
+
+    if len(selected) < 2:
+        st.warning("Please select at least 2 months.")
+        return
+
+    selected_archives = [month_options[m] for m in selected]
+    score_pivot, feedback_pivot, result = compare_months(selected_archives, owner_email)
+
+    # result is either an error string or a summary dict
+    if isinstance(result, str):
+        st.warning(result)
+        return
+
+    summary = result
+
+    # Summary metrics
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total changed", summary["total_changed"], "employees")
+    col2.metric("Improved", summary["improved"], delta=f"+{summary['improved']}", delta_color="normal")
+    col3.metric("Dropped", summary["dropped"], delta=f"-{summary['dropped']}", delta_color="inverse")
+
+    # Satisfaction score table with colour highlighting
+    st.markdown("#### Satisfaction score changes")
+    st.caption("🟢 Improved &nbsp;&nbsp; 🔴 Dropped compared to previous month")
+
+    month_cols = [c for c in score_pivot.columns if c not in ("employee_id", "employee_name")]
+
+    def highlight_change(row):
+        styles = ["", ""]  # employee_id, employee_name — no highlight
+        for i, col in enumerate(month_cols):
+            if i == 0:
+                styles.append("")
+            else:
+                prev = row[month_cols[i - 1]]
+                curr = row[col]
+                if pd.isna(prev) or pd.isna(curr):
+                    styles.append("")
+                elif curr > prev:
+                    styles.append("background-color: #d4edda; color: #155724;")  # green
+                elif curr < prev:
+                    styles.append("background-color: #f8d7da; color: #721c24;")  # red
+                else:
+                    styles.append("")
+        return styles
+
+    st.dataframe(
+        score_pivot.style.apply(highlight_change, axis=1),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "employee_id": st.column_config.TextColumn("Employee ID"),
+            "employee_name": st.column_config.TextColumn("Employee"),
+        },
+    )
+
+    # Feedback comparison table
+    st.markdown("#### Feedback changes")
+    st.caption("Side-by-side view of what employees wrote each month.")
+    st.dataframe(
+        feedback_pivot,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "employee_id": st.column_config.TextColumn("Employee ID"),
+            "employee_name": st.column_config.TextColumn("Employee"),
+        },
+    )
+
+    # Download button
+    merged = score_pivot.merge(feedback_pivot, on=["employee_id", "employee_name"], suffixes=(" (score)", " (feedback)"))
+    st.download_button(
+        "Download comparison report",
+        merged.to_csv(index=False).encode(),
+        "month_comparison.csv",
+        "text/csv",
+    )
+
+
 def render_assistant(context):
     st.subheader("PeopleLens AI assistant", anchor=False)
     st.caption("Ask questions about the active CSV. Answers are generated locally from this uploaded dataset.")
